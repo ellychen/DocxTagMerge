@@ -1,0 +1,5 @@
+/DocxTagFinder/bin/
+*.doc[x]
+/DocxTagFinder/obj/
+*.doc
+.vs/
