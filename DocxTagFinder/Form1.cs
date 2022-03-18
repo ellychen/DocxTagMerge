@@ -2,6 +2,7 @@ using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Wordprocessing;
 using DocumentFormat.OpenXml.Packaging;
 using System.Text.RegularExpressions;
+using odf = Independentsoft.Office.Odf;
 
 namespace DocxTagFinder
 {
@@ -278,5 +279,175 @@ namespace DocxTagFinder
         }
 
 
+
+
+
+        private void btnRun2_ODFClick(object sender, EventArgs e)
+        {
+
+
+            string StartTag = txtStartTag.Text.Trim();
+            string EndTag = txtEndTag.Text.Trim();
+            string PrefixTag = txtPrefixTag.Text.Trim();
+            string CloseTag = txtCloseTag.Text.Trim();
+            RegexTag = new Regex(@$"({PrefixTag})+(\w+)+({CloseTag})");
+            //
+
+
+            if (!System.IO.Directory.Exists(txtRawFile.Text.Trim()))
+            {
+                MessageBox.Show("來源目錄不存在");
+            }
+            if (!System.IO.Directory.Exists(txtSavePath.Text.Trim()))
+            {
+                //建立目的資料夾
+                Directory.CreateDirectory(txtSavePath.Text.Trim());
+            }
+
+            //來源 Docx 清單
+            List<string> DocxFiles = new List<string>();
+            foreach (var docx in System.IO.Directory.GetFiles(txtRawFile.Text.Trim()))
+            {
+                if (System.IO.Path.GetExtension(docx).ToLower() == ".odt")
+                {
+                    DocxFiles.Add(docx);
+                }
+            }
+
+            string ErrorMessage = "";
+            foreach (var odt in DocxFiles)
+            {
+                string FileName = Path.GetFileNameWithoutExtension(odt);
+                string SnapPath = System.IO.Path.Combine(txtSavePath.Text.Trim()
+                                            , $"{FileName}_{DateTime.Now.ToString("yyyy_MM_dd_HH_mm_ss")}{Path.GetExtension(odt)}");
+
+                System.IO.File.Copy(odt, SnapPath, true);
+                try
+                {
+                    ProcessODF(SnapPath, StartTag, PrefixTag);
+                }
+                catch (Exception ex)
+                {
+                    ErrorMessage += Path.GetFileName(odt) + " 失敗  ; " + ex.Message + " \n";
+                }
+
+            }
+            if (ErrorMessage != "")
+                MessageBox.Show(ErrorMessage);
+
+            MessageBox.Show("finish");
+        }
+
+
+
+        private void ProcessODF(string SnapPath, string StartTag, string PrefixTag)
+        {
+            odf.TextDocument doc = new odf.TextDocument(SnapPath);
+            // 取得每一行的 XML 
+            var bodyContents = doc.Body.Content;
+
+            // 每一個 Element 
+            //       這裡包含了 Text (包含XML) 及 AttributedText (只有內容文字)
+            // bodyContents[0].GetContentElements();
+
+            List<odf.ITextContent> TagLines = new List<odf.ITextContent>();
+            foreach (var line in bodyContents)
+            {
+                //實際字串內容
+
+                string LineString = string.Join("",
+                            line.GetContentElements()
+                                        .Where(d => d is odf.Text)
+                                        .Select(d => d.ToString()).ToArray()
+                            );
+
+
+                if (RegexTag.IsMatch(LineString))
+                {
+                    odf.Text BeginElement = null;
+                    List<odf.Text> PathElements = new List<odf.Text>();
+
+                    //檢查 單一 Text 就符合條件 
+                    // isAccept 
+                    bool NeedProcess = true;
+                    foreach (odf.Text text in line.GetContentElements().Where(d => d is odf.Text))
+                    {
+                        if (RegexTag.IsMatch(text.Value))
+                        {
+                            NeedProcess = false;
+                            break;
+                        }
+                    }
+                    if (!NeedProcess)
+                        continue;
+                    //
+
+                    var Elements = line.GetContentElements();
+                    for (int i = 0; i < Elements.Count; i++)
+                    {
+                        var Ele = Elements[i];
+                        if (Ele is odf.Text)
+                        {
+                            var TextEle = Ele as odf.Text;
+                            if (TextEle == null) continue;
+                            //
+
+                            if (BeginElement != null)
+                            {
+                                PathElements.Add(TextEle);
+                            }
+                            else
+                            {
+                                if (TextEle.ToString().IndexOf(StartTag) > -1)
+                                {
+                                    // 有起始標記 ,  合併後面的字串是否完整符合
+                                    while (true)
+                                    {
+                                        ++i;
+                                        if (Elements[i] is not odf.Text) continue;
+                                        if (Elements[i].ToString() == "") continue;
+
+                                        if ((Ele.ToString() + Elements[i].ToString()).IndexOf(PrefixTag) > -1)
+                                        {
+                                            //記錄啟動點
+                                            BeginElement = TextEle;
+                                            // 
+                                            PathElements.Add(TextEle);
+                                            PathElements.Add(Elements[i] as odf.Text);
+
+                                        }
+                                        else
+                                        {
+                                            //不符                                        
+                                        }
+
+                                        break;
+                                    }
+                                }
+                            }
+
+                            //檢查字串
+                            if (RegexTag.IsMatch(
+                                    string.Join("", PathElements.Select(t => t.ToString()).ToArray())))
+                            {
+                                //字串完全符合
+
+                                // 把字串全部放進 BeginElement 
+                                BeginElement.Value = string.Join("", PathElements.Select(t => t.ToString()).ToArray());
+                                // 把PathElement 的Value (除了第0筆) 全部清空
+                                for (int x = 1; x < PathElements.Count; x++)
+                                {
+                                    PathElements[x].Value = "";
+                                }
+
+                                //重覆檢查 , 避免有第二組 { 
+                            }
+                        }
+                    }
+                }
+            }
+
+            doc.Save(SnapPath, true);
+        }
     }
 }
